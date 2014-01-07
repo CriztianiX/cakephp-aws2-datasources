@@ -1,65 +1,42 @@
 <?php
+use Aws\Sqs\SqsClient;
+
 class SQSSource extends DataSource {
     public $description = "Amazon Simple Queue Service (SQS)";
-    
-    public $config = array(
-        'key' => '',
-        'secret' => ''
-    );
-    
+    public $sqsClient;
+    public $config = array();
+                
+    /**
+     * column definition
+     *
+     * @var array
+     */
     public $columns = array(
-        'boolean' => array('name' => 'boolean'),
-        'string' => array('name' => 'varchar'),
-        'text' => array('name' => 'text'),
-        'integer' => array('name' => 'integer', 'format' => null, 'formatter' => 'intval'),
-        'float' => array('name' => 'float', 'format' => null, 'formatter' => 'floatval'),
-        'datetime' => array('name' => 'datetime'),
+        'datetime' => array('name' => 'datetime', 'format' => 'Y-m-d H:i:s', 'formatter' => 'date'),
+        'timestamp' => array('name' => 'timestamp', 'format' => 'Y-m-d H:i:s', 'formatter' => 'date'),
+        'time' => array('name' => 'time', 'format' => 'H:i:s', 'formatter' => 'date'),
+        'date' => array('name' => 'date', 'format' => 'Y-m-d', 'formatter' => 'date'),
     );
-        
+
+
     public function __construct($config) {
         parent::__construct($config);
-        
-        CFCredentials::set(array(
-            
-            // Credentials for the development environment.
-            'development' => array(
+        $this->config = $config;
 
-                // Amazon Web Services Key. Found in the AWS Security Credentials. You can also pass
-                // this value as the first parameter to a service constructor.
-                'key' => $config['key'],
+        $awsConfig = array(
+            'key' => $config['key'],
+            'secret' => $config['secret'],
+            'region' => $config['region']
+        );
 
-                // Amazon Web Services Secret Key. Found in the AWS Security Credentials. You can also
-                // pass this value as the second parameter to a service constructor.
-                'secret' => $config['secret'],
-
-                // This option allows you to configure a preferred storage type to use for caching by
-                // default. This can be changed later using the set_cache_config() method.
-                //
-                // Valid values are: `apc`, `xcache`, or a file system path such as `./cache` or
-                // `/tmp/cache/`.
-                'default_cache_config' => '',
-
-                // Determines which Cerificate Authority file to use.
-                //
-                // A value of boolean `false` will use the Certificate Authority file available on the
-                // system. A value of boolean `true` will use the Certificate Authority provided by the
-                // SDK. Passing a file system path to a Certificate Authority file (chmodded to `0755`)
-                // will use that.
-                //
-                // Leave this set to `false` if you're not sure.
-                'certificate_authority' => false
-            ),
-
-            // Specify a default credential set to use if there are more than one.
-            '@default' => 'development'
-        ));
+        $this->sqsClient = SqsClient::factory($awsConfig);
     }
     
-    public function listSources() {
+    public function listSources($data = null) {
         return null;
     }
     
-    public function describe(Model $Model) {
+    public function describe($Model) {
         return $Model->_schema;
     }
     
@@ -79,47 +56,41 @@ class SQSSource extends DataSource {
     
     public function create(Model $Model, $fields = array(), $values = array()) {
         $data = array_combine($fields, $values);
-
-        return $this->_sendMessage($Model->queueURL, json_encode($data));
+        
+        return $this->_sendMessage($this->config['sqs']['url'], json_encode($data));
     }
     
-    public function update(Model $Model, $fields = array(), $values = array()) {
+    public function update(Model $model, $fields = NULL, $values = NULL, $conditions = NULL) {
         return $this->create($Model, $fields, $values);
     }
     
-    public function read(Model $Model, $data = array()) {
-        if ($data['fields'] == 'COUNT') {
+    public function read(Model $Model, $queryData = array(), $recursive = NULL) {
+        $Model->queueURL = $this->config['sqs']['url'];
+        $options = array();
+        //print_r($queryData); die();
+        if ($queryData['fields'] == 'COUNT') {
             return array(array(array('count' => $this->_getQueueSize($Model->queueURL))));
         }
-        
-        if (isset($data['limit']) && !empty($data['limit'])) {
-            $options['MaxNumberOfMessages'] = $data['limit'];
+        if (isset($queryData['limit']) && !empty($queryData['limit'])) {
+            $options['MaxNumberOfMessages'] = $queryData['limit'];
         }
 
-        $response = $this->_receiveMessage($Model->queueURL, $options);
-
-        if ($response === false) return false;
+        $options['QueueUrl'] = $Model->queueURL;
+        $response = $this->_receiveMessage($options);
+        
+        if ($response === false) return array();
         else {
-            $response = $response->to_stdClass();
-            $messages = $response->ReceiveMessageResult->Message;
-            
+
             $results = array();
-            if (is_array($messages)) {
-                foreach ($messages as $message) {
-                    $row = array($Model->alias => get_object_vars(json_decode($message->Body)));
-                    $row[$Model->alias]['message_id'] = $message->MessageId;
-                    $row[$Model->alias]['receipt_handle'] = $message->ReceiptHandle;
+            if (is_array($response)) {
+                foreach($response as $item) {
+                    $row[$Model->alias]['body'] = $item['Body'];
+                    $row[$Model->alias]['message_id'] = $item['MessageId'];
+                    $row[$Model->alias]['receipt_handle'] = $item['ReceiptHandle'];
                     $results[] = $row;
                 }
             }
-            else {
-                $message = $messages;
-                $row = array($Model->alias => get_object_vars(json_decode($message->Body)));
-                $row[$Model->alias]['message_id'] = $message->MessageId;
-                $row[$Model->alias]['receipt_handle'] = $message->ReceiptHandle;
-                $results[] = $row;
-            }
-            
+        
             return $results;
         }
     }
@@ -144,27 +115,22 @@ class SQSSource extends DataSource {
     protected function _sendMessage($queueURL, $message) {
         if (!is_string($message)) return false;
         
-        $sqs = new AmazonSQS();
-        $response = $sqs->send_message($queueURL, $message);
-        
-        if (!$response->isOK()) {
-            $this->log($response->body, 'sqs');
-            return false;
-        }
+        $this->sqsClient->sendMessage(array(
+            'QueueUrl' => $queueURL, 
+            'MessageBody' => $message
+        ));
         
         return true;
     }
     
-    protected function _receiveMessage($queueURL, $opt = null) {
-        $sqs = new AmazonSQS();
-        $response = $sqs->receive_message($queueURL, $opt);
+    protected function _receiveMessage(array $opt) {
+       $response = $this->sqsClient->receiveMessage($opt);
+       $messages = $response->get('Messages'); 
         
-        if (!$response->isOK()) {
-            $this->log($response->body, 'sqs');
-            return false;
-        }
-        
-        return $response->body;
+        if(!empty($messages))
+            return $messages;
+
+        return false;
     }
     
     protected function _getQueueSize($queueURL) {

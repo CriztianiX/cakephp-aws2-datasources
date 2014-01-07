@@ -1,26 +1,20 @@
 {
-    "name": "uzyn/cakephp-aws-datasources",
+    "name": "CriztianiX/cakephp-aws2-datasources",
     "description": "AWS Simple Storage Service (S3) & Simple Queue Service (SQS) database drivers for CakePHP",
     "keywords": ["aws","sqs","amazon","queue","simple queue service","cakephp","cakephp plugin","datasource","database","s3","storage","simple storage service"],
-    "homepage": "http://uzyn.com",
+    "homepage": "http://www.cristianhaunsen.com.ar",
     "license": "MIT",
     "authors": [
         {
-            "name": "U-Zyn Chua",
-            "email": "chua@uzyn.com",
-            "homepage": "http://uzyn.com"
+            "name": "Cristian Haunsen",
+            "email": "cristanhaunsen@gmail.com",
+            "homepage": "http://cristianhaunsen.com.ar"
         }
     ],
     "type": "cakephp-plugin",
-    "repositories": [
-        {
-            "url": "git://github.com/uzyn/composer-installers.git",
-            "type": "git"
-        }
-    ],
     "require": {
-        "uzyn/composer-installers": "*",
-        "amazonwebservices/aws-sdk-for-php": "1.5.*"
+        "composer/installers": "1.0.*@dev",
+        "aws/aws-sdk-php": "dev-master"
     },
     "extra": {
         "installers-name": "AWSDatasources"
